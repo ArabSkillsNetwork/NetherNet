@@ -227,7 +227,7 @@ jobs:
             echo "Built by: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
             echo "CNetherNet: ${{ env.CNETHERNET_REPO }}@${{ env.CNETHERNET_REF }}"
             echo
-            echo "PHP extension built for the ${{ env.PHP_BINARIES_REPO }} binaries (pm5-php-<version>-latest). Linux: put nethernet.so in the extension dir and add extension=nethernet.so to php.ini. Windows: put php_nethernet.dll in bin/php/ext and add extension=php_nethernet.dll."
+            echo "PHP extension built for the ${{ env.PHP_BINARIES_REPO }} binaries (\`pm5-php-<version>-latest\`). Linux: put nethernet.so in the extension dir and add extension=nethernet.so to php.ini. Windows: put php_nethernet.dll in bin/php/ext and add extension=php_nethernet.dll."
           } > notes.md
 
       - uses: ncipollo/release-action@v1.20.0

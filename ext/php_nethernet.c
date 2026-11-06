@@ -23,6 +23,10 @@
  * SOFTWARE.
  */
 
+#if defined(_MSC_VER) && !defined(__cplusplus)
+typedef double max_align_t;
+#endif
+
 #include <php.h>
 #include <ext/standard/info.h>
 #include <ext/json/php_json.h>
