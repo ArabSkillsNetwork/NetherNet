@@ -1,0 +1,7 @@
+.vscode/
+build/
+build-php/
+build-linux/
+vendor/
+composer.lock
+*.pem

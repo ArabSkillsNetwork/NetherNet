@@ -1,0 +1,26 @@
+{
+    "name": "laith98dev/nethernet",
+    "description": "NetherNet implementation for php",
+    "type": "library",
+    "license": "MIT",
+    "autoload": {
+        "psr-4": {
+            "Laith98Dev\\nethernet\\": "src/"
+        }
+    },
+    "authors": [
+        {
+            "name": "vp817",
+            "email": "vpmcssscontact@gmail.com"
+        },
+        {
+            "name": "Laith98Dev",
+            "email": "spt.laithdev@gmail.com"
+        }
+    ],
+    "minimum-stability": "stable",
+    "require": {
+        "php": ">=8.2",
+        "ext-nethernet": "*"
+    }
+}

@@ -1,0 +1,221 @@
+name: Build extension
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CNETHERNET_REPO: vp817/CNetherNet
+  CNETHERNET_REF: main
+  PHP_BINARIES_REPO: ArabSkillsNetwork/PHP-Binaries
+
+jobs:
+  linux:
+    name: Linux - PHP ${{ matrix.php }}
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ["8.2", "8.3", "8.4", "8.5"]
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: CNetherNet-PHP
+
+      - uses: actions/checkout@v5
+        with:
+          repository: ${{ env.CNETHERNET_REPO }}
+          ref: ${{ env.CNETHERNET_REF }}
+          path: CNetherNet
+          submodules: recursive
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake curl libssl-dev
+
+      - name: Download PHP ${{ matrix.php }}
+        run: |
+          mkdir phpbin
+          curl -fsSL "https://github.com/${PHP_BINARIES_REPO}/releases/download/pm5-php-${{ matrix.php }}-latest/PHP-${{ matrix.php }}-Linux-x86_64-PM5.tar.gz" | tar -xz -C phpbin
+
+      # PMMP's Linux binaries don't ship include/: generate the headers from the matching php source
+      - name: PHP headers
+        run: |
+          VERSION=$(phpbin/bin/php7/bin/php -n -r 'echo PHP_VERSION;')
+          mkdir php-src
+          curl -fsSL "https://www.php.net/distributions/php-$VERSION.tar.gz" | tar -xz -C php-src --strip-components=1
+          cd php-src
+          ./configure --prefix="$PWD/../php-headers" --enable-zts --disable-all --disable-cgi --disable-phpdbg \
+            --without-pear --without-sqlite3 --without-pdo-sqlite --without-libxml > /dev/null
+          make install-headers > /dev/null
+
+      - name: Build
+        run: |
+          cmake -S CNetherNet-PHP/ext -B build -DCMAKE_BUILD_TYPE=Release \
+            -DPHP_INCLUDE_DIR="$PWD/php-headers/include/php" \
+            -DOPENSSL_SSL_LIBRARY="$PWD/phpbin/bin/php7/lib/libssl.so" \
+            -DOPENSSL_CRYPTO_LIBRARY="$PWD/phpbin/bin/php7/lib/libcrypto.so"
+          cmake --build build --target php_nethernet --parallel
+          strip --strip-unneeded build/nethernet.so
+
+      - name: Test
+        run: |
+          phpbin/bin/php7/bin/php -n -d extension=$PWD/build/nethernet.so -r '
+            if (!extension_loaded("nethernet")) { exit(1); }
+            $s = new NetherNet\Server(["operator_key_path" => sys_get_temp_dir() . "/op.pem", "operator_domain" => "ci.test", "allow_unauthenticated" => true]);
+            $s->start("http://127.0.0.1:19132", ["name" => "ci", "protocol" => 0]);
+            $s->update();
+            $s->close();
+            echo "nethernet ", phpversion("nethernet"), " OK on PHP ", PHP_VERSION, "\n";
+          '
+
+      - name: Package
+        run: |
+          NAME=nethernet-PHP-${{ matrix.php }}-Linux-x86_64
+          mkdir $NAME && cp build/nethernet.so $NAME/
+          tar -czf $NAME.tar.gz $NAME
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: nethernet-PHP-${{ matrix.php }}-Linux-x86_64
+          path: nethernet-PHP-${{ matrix.php }}-Linux-x86_64.tar.gz
+          if-no-files-found: error
+
+  windows:
+    name: Windows - PHP ${{ matrix.php }}
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - php: "8.2"
+            vs: vs16
+          - php: "8.3"
+            vs: vs16
+          - php: "8.4"
+            vs: vs17
+          - php: "8.5"
+            vs: vs17
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: CNetherNet-PHP
+
+      - uses: actions/checkout@v5
+        with:
+          repository: ${{ env.CNETHERNET_REPO }}
+          ref: ${{ env.CNETHERNET_REF }}
+          path: CNetherNet
+          submodules: recursive
+
+      - name: Download PHP ${{ matrix.php }}
+        shell: pwsh
+        run: |
+          Invoke-WebRequest "https://github.com/$env:PHP_BINARIES_REPO/releases/download/pm5-php-${{ matrix.php }}-latest/PHP-${{ matrix.php }}-Windows-x64-PM5.zip" -OutFile phpbin.zip
+          Expand-Archive phpbin.zip -DestinationPath phpbin
+
+      - name: Download the PHP headers
+        shell: pwsh
+        run: |
+          # the binaries are patched official releases: the headers of the same official version match them
+          $version = & phpbin\bin\php\php.exe -n -r "echo PHP_VERSION;"
+          $pack = "php-devel-pack-$version-Win32-${{ matrix.vs }}-x64.zip"
+          try {
+            Invoke-WebRequest "https://windows.php.net/downloads/releases/$pack" -OutFile devpack.zip
+          } catch {
+            Invoke-WebRequest "https://windows.php.net/downloads/releases/archives/$pack" -OutFile devpack.zip
+          }
+          Expand-Archive devpack.zip -DestinationPath devpack-tmp
+          Move-Item (Get-ChildItem devpack-tmp | Select-Object -First 1).FullName devpack
+          # link against the import library of the binary we load into, not the official one
+          Copy-Item phpbin\bin\php\dev\php8ts.lib devpack\lib\php8ts.lib -Force
+          $buildId = (& phpbin\bin\php\php.exe -n -i | Select-String "^PHP Extension Build").ToString().Split("=>")[-1].Trim()
+          "PHP_BUILD_ID=$buildId" >> $env:GITHUB_ENV
+          "PHP $version, build id $buildId" | Write-Host
+
+      - name: Install OpenSSL
+        shell: pwsh
+        run: |
+          vcpkg install openssl:x64-windows-static-md
+          "OPENSSL_ROOT=$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows-static-md" -replace '\\', '/' >> $env:GITHUB_ENV
+
+      - name: Build
+        shell: pwsh
+        run: |
+          cmake -S CNetherNet-PHP/ext -B build-php -A x64 `
+            -DPHP_DEV_DIR="$PWD/devpack" `
+            -DPHP_BUILD_ID="$env:PHP_BUILD_ID" `
+            -DOPENSSL_ROOT_DIR="$env:OPENSSL_ROOT"
+          cmake --build build-php --config Release --parallel
+
+      - name: Test
+        shell: pwsh
+        run: |
+          $test = @'
+          if (!extension_loaded("nethernet")) { exit(1); }
+          $s = new NetherNet\Server(["operator_key_path" => sys_get_temp_dir() . "/op.pem", "operator_domain" => "ci.test", "allow_unauthenticated" => true]);
+          $s->start("http://127.0.0.1:19132", ["name" => "ci", "protocol" => 0]);
+          $s->update();
+          $s->close();
+          echo "nethernet ", phpversion("nethernet"), " OK on PHP ", PHP_VERSION, "\n";
+          '@
+          Set-Content test.php "<?php`n$test"
+          & phpbin\bin\php\php.exe -n -d "extension=$PWD\build-php\Release\php_nethernet.dll" test.php
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $name = "nethernet-PHP-${{ matrix.php }}-Windows-x64"
+          New-Item -ItemType Directory $name | Out-Null
+          Copy-Item build-php\Release\php_nethernet.dll $name\
+          Compress-Archive $name "$name.zip"
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: nethernet-PHP-${{ matrix.php }}-Windows-x64
+          path: nethernet-PHP-${{ matrix.php }}-Windows-x64.zip
+          if-no-files-found: error
+
+  release:
+    name: Draft release
+    needs: [linux, windows]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/download-artifact@v6
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Release notes
+        run: |
+          {
+            echo "Built by: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo "CNetherNet: ${{ env.CNETHERNET_REPO }}@${{ env.CNETHERNET_REF }}"
+            echo
+            echo "PHP extension built for the ${{ env.PHP_BINARIES_REPO }} binaries (pm5-php-<version>-latest). Linux: put nethernet.so in the extension dir and add extension=nethernet.so to php.ini. Windows: put php_nethernet.dll in bin/php/ext and add extension=php_nethernet.dll."
+          } > notes.md
+
+      - uses: ncipollo/release-action@v1.20.0
+        with:
+          artifacts: artifacts/*
+          name: NetherNet ${{ github.ref_name }}
+          tag: ${{ github.ref_name }}
+          bodyFile: notes.md
+          draft: true
+          allowUpdates: true
+          updateOnlyUnreleased: true
