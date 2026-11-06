@@ -99,16 +99,12 @@ jobs:
         include:
           - php: "8.2"
             vs: vs16
-            toolset: v142
           - php: "8.3"
             vs: vs16
-            toolset: v142
           - php: "8.4"
             vs: vs17
-            toolset: v143
           - php: "8.5"
             vs: vs17
-            toolset: v143
 
     steps:
       - uses: actions/checkout@v5
@@ -156,12 +152,31 @@ jobs:
       - name: Build
         shell: pwsh
         run: |
-          # php refuses a dll linked by a newer MSVC than itself: 8.2/8.3 are VS 2019 (v142) builds
-          cmake -S CNetherNet-PHP/ext -B build-php -A x64 -T ${{ matrix.toolset }} `
+          cmake -S CNetherNet-PHP/ext -B build-php -A x64 `
             -DPHP_DEV_DIR="$PWD/devpack" `
             -DPHP_BUILD_ID="$env:PHP_BUILD_ID" `
             -DOPENSSL_ROOT_DIR="$env:OPENSSL_ROOT"
           cmake --build build-php --config Release --parallel
+
+      # 8.2/8.3 are VS 2019 builds and php refuses a dll whose linker is newer than its own. libdatachannel and C11
+      # atomics need VS 2022, so the dll is built with it and gets php's linker version stamped on; it only needs a
+      # current VC++ redistributable, which the PHP-Binaries releases already ask Windows users to install
+      - name: Match php's linker version
+        shell: pwsh
+        run: |
+          function Get-LinkerOffset([byte[]] $b) { [BitConverter]::ToInt32($b, 0x3C) + 24 + 2 }
+          $core = [IO.File]::ReadAllBytes("$PWD/phpbin/bin/php/php8ts.dll")
+          $c = Get-LinkerOffset $core
+          $dllPath = "$PWD/build-php/Release/php_nethernet.dll"
+          $dll = [IO.File]::ReadAllBytes($dllPath)
+          $d = Get-LinkerOffset $dll
+          "php linked with $($core[$c]).$($core[$c + 1]), dll with $($dll[$d]).$($dll[$d + 1])" | Write-Host
+          if ($dll[$d] -ne $core[$c] -or $dll[$d + 1] -gt $core[$c + 1]) {
+            $dll[$d] = $core[$c]
+            $dll[$d + 1] = $core[$c + 1]
+            [IO.File]::WriteAllBytes($dllPath, $dll)
+            "stamped $($core[$c]).$($core[$c + 1])" | Write-Host
+          }
 
       - name: Test
         shell: pwsh
