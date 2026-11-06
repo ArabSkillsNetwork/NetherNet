@@ -99,12 +99,16 @@ jobs:
         include:
           - php: "8.2"
             vs: vs16
+            toolset: v142
           - php: "8.3"
             vs: vs16
+            toolset: v142
           - php: "8.4"
             vs: vs17
+            toolset: v143
           - php: "8.5"
             vs: vs17
+            toolset: v143
 
     steps:
       - uses: actions/checkout@v5
@@ -152,7 +156,8 @@ jobs:
       - name: Build
         shell: pwsh
         run: |
-          cmake -S CNetherNet-PHP/ext -B build-php -A x64 `
+          # php refuses a dll linked by a newer MSVC than itself: 8.2/8.3 are VS 2019 (v142) builds
+          cmake -S CNetherNet-PHP/ext -B build-php -A x64 -T ${{ matrix.toolset }} `
             -DPHP_DEV_DIR="$PWD/devpack" `
             -DPHP_BUILD_ID="$env:PHP_BUILD_ID" `
             -DOPENSSL_ROOT_DIR="$env:OPENSSL_ROOT"
